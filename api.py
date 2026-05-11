@@ -25,6 +25,7 @@ from questions import get_all_questions
 from career_mapping import CAREER_FIELDS
 from orchestrator import run_pipeline
 from data_logger import init_db, get_result, log_feedback
+from college_recommender import recommend_colleges, CollegeMatch
 
 app = FastAPI(
     title="AI Career Counsellor — Personality Engine",
@@ -109,6 +110,54 @@ def list_career_fields():
         }
         for cf in CAREER_FIELDS
     ]
+
+
+@app.get("/college-recommendations/{user_id}", response_model=list[CollegeMatch])
+def college_recommendations(
+    user_id: str,
+    state: str | None = None,
+    top_n: int = 10,
+    require_naac: bool = False,
+):
+    """
+    Recommend Indian colleges based on a completed personality test result.
+    Uses OCEAN vector + top career matches to rank colleges by:
+      - Stream relevance (40%)
+      - NAAC quality grade (35%)
+      - Personality-environment fit (25%)
+
+    Args:
+        user_id      : from a completed /submit-test call
+        state        : optional filter e.g. "Uttar Pradesh"
+        top_n        : how many colleges to return (default 10, max 50)
+        require_naac : if true, only return NAAC-graded colleges
+    """
+    stored = get_result(user_id)
+    if not stored:
+        raise HTTPException(status_code=404, detail=f"No test result found for user_id: {user_id}")
+
+    ocean = stored["ocean_vector"]
+    careers = stored["career_recommendations"]
+
+    try:
+        top_n = min(top_n, 50)
+        colleges = recommend_colleges(
+            ocean=ocean,
+            career_matches=careers,
+            state=state,
+            top_n=top_n,
+            require_naac=require_naac,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not colleges:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No colleges found for state='{state}'. Try without a state filter."
+        )
+
+    return colleges
 
 
 @app.post("/feedback")
